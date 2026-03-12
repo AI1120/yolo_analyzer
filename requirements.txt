@@ -1,0 +1,16 @@
+PyQt5>=5.15
+matplotlib>=3.5
+pandas>=1.5
+numpy>=1.23
+opencv-python>=4.6
+scikit-learn>=1.1
+tqdm
+ultralytics
+open-clip-torch
+faiss-cpu
+torch
+torchvision
+torchaudio
+Pillow
+requests
+
