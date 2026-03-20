@@ -29,9 +29,14 @@ def object_size_stats(df):
     return small,medium,large
 
 
-def anchor_boxes(df):
+def anchor_boxes(df, sample_size=50000):
 
     boxes=df[["bw","bh"]].values
+
+    if len(boxes) > sample_size:
+        # Random sampling without replacement
+        indices = np.random.choice(len(boxes), sample_size, replace=False)
+        boxes = boxes[indices]
 
     km=KMeans(n_clusters=9).fit(boxes)
 

@@ -10,9 +10,9 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QTabWidget, QProgressBar, 
     QFileDialog, QTextEdit, QMessageBox, QFrame, 
     QSizePolicy, QProgressDialog, QComboBox, QGroupBox,
-    QRadioButton, QDialog
+    QRadioButton, QDialog, QSlider, QSpinBox
 )
-from PyQt5.QtGui import QPixmap, QFont, QIcon
+from PyQt5.QtGui import QPixmap, QFont, QIcon, QKeySequence
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 # -----------------------------
@@ -130,16 +130,16 @@ QPushButton#Secondary:hover {
 }
 QPushButton#ModelSelect {
     background-color: #8b5cf6;
-    font-size: 16px;
-    padding: 15px 30px;
+    font-size: 14px;
+    padding: 12px 25px;
 }
 QPushButton#ModelSelect:hover {
     background-color: #7c3aed;
 }
 QPushButton#DatasetSelect {
     background-color: #3b82f6;
-    font-size: 16px;
-    padding: 15px 30px;
+    font-size: 14px;
+    padding: 12px 25px;
 }
 QPushButton#DatasetSelect:hover {
     background-color: #2563eb;
@@ -258,12 +258,13 @@ class AnalyzerWorker(QThread):
     finished = pyqtSignal(dict)
     status_message = pyqtSignal(str)
 
-    def __init__(self, image_paths, model_config, batch_size=32):
+    def __init__(self, image_paths, model_config, threshold=0.94, batch_size=32):
         super().__init__()
         self.image_paths = image_paths
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.batch_size = batch_size
         self.model_config = model_config
+        self.threshold = threshold
         self.model = None
         self.preprocess = None
 
@@ -452,7 +453,7 @@ class AnalyzerWorker(QThread):
 
             duplicates = []
             seen_pairs = set()
-            threshold = 0.94
+            threshold = self.threshold
 
             for i in range(len(sims)):
                 for j_idx, score in zip(neighbors[i], sims[i]):
@@ -679,6 +680,7 @@ class ClusterViewer(QMainWindow):
         self.setWindowTitle("Duplicate Inspector")
         self.resize(1400, 900)
         self.setStyleSheet(DARK_STYLE)
+        self.setFocusPolicy(Qt.StrongFocus)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -753,6 +755,16 @@ class ClusterViewer(QMainWindow):
         main_layout.addWidget(log_frame)
 
         self.show_pair()
+        
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Left:
+            self.prev_pair()
+        elif event.key() == Qt.Key_Right:
+            self.next_pair()
+        elif event.key() == Qt.Key_Delete:
+            self.move_to_trash()
+        else:
+            super().keyPressEvent(event)
 
     def create_image_card(self, title, color_hex):
         container = QWidget()
@@ -1004,12 +1016,13 @@ class YOLOInspector(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         self.layout = QVBoxLayout(central_widget)
-        self.layout.setContentsMargins(30, 30, 30, 30)
-        self.layout.setSpacing(25)
+        self.layout.setContentsMargins(20, 20, 20, 20)
+        self.layout.setSpacing(12)
 
         header_label = QLabel("🤖 YOLO Dataset Duplicate Analyzer")
         header_label.setObjectName("Title")
         header_label.setAlignment(Qt.AlignCenter)
+        header_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #ffffff; padding: 8px;")
         self.layout.addWidget(header_label)
 
         if not USE_OPEN_CLIP and not USE_CLIP:
@@ -1019,45 +1032,102 @@ class YOLOInspector(QMainWindow):
             self.layout.addWidget(warning)
 
         model_card = QFrame()
-        model_card.setStyleSheet("background-color: #2b2b2b; border: 2px solid #8b5cf6;")
+        model_card.setStyleSheet("background-color: #2b2b2b; border-radius: 8px; padding: 8px;")
         model_layout = QVBoxLayout(model_card)
-        model_layout.setSpacing(15)
+        model_layout.setSpacing(8)
         
-        model_title = QLabel("Step 1: Select Embedding Model")
-        model_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #8b5cf6;")
-        model_layout.addWidget(model_title)
+        # model_title = QLabel("Select Embedding Model")
+        # model_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #8b5cf6; margin-bottom: 5px;")
+        # model_layout.addWidget(model_title)
         
         self.model_select_btn = QPushButton("🧠 Select Model")
-        self.model_select_btn.setObjectName("ModelSelect")
-        self.model_select_btn.setMinimumHeight(60)
+        self.model_select_btn.setStyleSheet("background-color: #8b5cf6; color: white; border: 1px solid #7c3aed; border-radius: 6px; font-size: 14px; padding: 12px 25px; font-weight: bold;")
+        self.model_select_btn.setObjectName("")
+        self.model_select_btn.setMinimumHeight(40)
         self.model_select_btn.clicked.connect(self.open_model_selection)
         model_layout.addWidget(self.model_select_btn)
         
         self.model_status_label = QLabel("⚠️ No model selected")
-        self.model_status_label.setObjectName("ModelInfo")
+        self.model_status_label.setStyleSheet("font-size: 12px; color: #a5b4fc; padding: 8px; background-color: #312e81; border-radius: 6px; font-weight: bold;")
         self.model_status_label.setAlignment(Qt.AlignCenter)
         self.model_status_label.setWordWrap(True)
         model_layout.addWidget(self.model_status_label)
         
-        self.layout.addWidget(model_card)
-
-        dataset_card = QFrame()
-        dataset_card.setStyleSheet("background-color: #2b2b2b; border: 2px solid #3b82f6;")
-        dataset_layout = QVBoxLayout(dataset_card)
-        dataset_layout.setSpacing(15)
+        # Create a horizontal layout for the top section
+        top_section = QHBoxLayout()
         
-        dataset_title = QLabel("Step 2: Select Dataset Folder")
-        dataset_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #3b82f6;")
-        dataset_layout.addWidget(dataset_title)
+        # Left column for model and dataset
+        left_column = QVBoxLayout()
+        left_column.addWidget(model_card)
+        
+        dataset_card = QFrame()
+        dataset_card.setStyleSheet("background-color: #2b2b2b; border-radius: 8px; padding: 8px;")
+        dataset_layout = QVBoxLayout(dataset_card)
+        dataset_layout.setSpacing(8)
         
         self.select_btn = QPushButton("📂 Select Dataset Folder")
-        self.select_btn.setObjectName("DatasetSelect")
-        self.select_btn.setMinimumHeight(60)
+        self.select_btn.setStyleSheet("background-color: #3b82f6; color: white; border: 1px solid #2563eb; border-radius: 6px; font-size: 14px; padding: 12px 25px; font-weight: bold;")
+        self.select_btn.setMinimumHeight(40)
         self.select_btn.clicked.connect(self.select_folder)
         self.select_btn.setEnabled(False)
         dataset_layout.addWidget(self.select_btn)
         
-        self.layout.addWidget(dataset_card)
+        self.folder_status_label = QLabel("⚠️ No folder selected")
+        self.folder_status_label.setStyleSheet("font-size: 12px; color: #a5b4fc; padding: 8px; background-color: #312e81; border-radius: 6px; font-weight: bold;")
+        self.folder_status_label.setAlignment(Qt.AlignCenter)
+        self.folder_status_label.setWordWrap(True)
+        dataset_layout.addWidget(self.folder_status_label)
+        
+        left_column.addWidget(dataset_card)
+        
+        # Right column for threshold and analysis
+        right_column = QVBoxLayout()
+        
+        threshold_card = QFrame()
+        threshold_card.setStyleSheet("background-color: #2b2b2b; border-radius: 8px; padding: 8px;")
+        threshold_layout = QVBoxLayout(threshold_card)
+        threshold_layout.setSpacing(5)
+        threshold_layout.setContentsMargins(5, 5, 5, 5)
+        
+        threshold_controls = QHBoxLayout()
+        
+        threshold_label = QLabel("Threshold:")
+        threshold_label.setStyleSheet("color: #e0e0e0; font-size: 14px;")
+        threshold_controls.addWidget(threshold_label)
+        
+        self.threshold_slider = QSlider(Qt.Horizontal)
+        self.threshold_slider.setRange(80, 99)
+        self.threshold_slider.setValue(94)
+        self.threshold_slider.setTickPosition(QSlider.TicksBelow)
+        self.threshold_slider.setTickInterval(5)
+        self.threshold_slider.valueChanged.connect(self.update_threshold_from_slider)
+        threshold_controls.addWidget(self.threshold_slider)
+        
+        self.threshold_spinbox = QSpinBox()
+        self.threshold_spinbox.setRange(80, 99)
+        self.threshold_spinbox.setValue(94)
+        self.threshold_spinbox.setSuffix("%")
+        self.threshold_spinbox.valueChanged.connect(self.update_threshold_from_spinbox)
+        threshold_controls.addWidget(self.threshold_spinbox)
+        
+        threshold_layout.addLayout(threshold_controls)
+        
+        right_column.addWidget(threshold_card)
+        
+        # Add run analysis button directly without card wrapper
+        self.run_analysis_btn = QPushButton("🚀 Run Duplicate Analysis")
+        self.run_analysis_btn.setStyleSheet("background-color: #10b981; color: white; border: 1px solid #059669; border-radius: 6px; font-size: 14px; padding: 12px 25px; font-weight: bold; margin-top: 8px;")
+        self.run_analysis_btn.setMinimumHeight(40)
+        self.run_analysis_btn.clicked.connect(self.run_analysis)
+        self.run_analysis_btn.setEnabled(False)
+        right_column.addWidget(self.run_analysis_btn)
+        
+        # Add columns to horizontal layout with equal stretch factors
+        top_section.addLayout(left_column, 1)  # 50% width
+        top_section.addLayout(right_column, 1)  # 50% width
+        
+        # Add the horizontal section to main layout
+        self.layout.addLayout(top_section)
 
         self.status = QLabel("Status: Idle - Select a model first")
         self.status.setObjectName("Status")
@@ -1073,14 +1143,17 @@ class YOLOInspector(QMainWindow):
         self.layout.addWidget(self.tabs, 1)
 
         self.summary = QTextEdit()
-        self.summary.setMaximumHeight(150)
-        self.layout.addWidget(QLabel("Analysis Summary:"))
+        self.summary.setMaximumHeight(120)
+        summary_label = QLabel("Analysis Summary:")
+        summary_label.setStyleSheet("font-size: 14px; font-weight: bold; margin-top: 5px;")
+        self.layout.addWidget(summary_label)
         self.layout.addWidget(self.summary)
 
         self.image_paths = []
         self.viewer = None
         self.model_config = None
         self.worker = None
+        self.selected_folder = None
 
     def open_model_selection(self):
         dialog = ModelSelectionDialog(self)
@@ -1091,25 +1164,26 @@ class YOLOInspector(QMainWindow):
         self.model_config = model_config
         display_name = model_config.get("display_name", "Unknown")
         
-        self.model_status_label.setText(f"✅ Model Selected: {display_name}")
-        self.model_status_label.setObjectName("ModelSelected")
-        self.model_status_label.setStyleSheet(self.model_status_label.styleSheet())
+        self.model_status_label.setText(f"✅ {display_name}")
+        self.model_status_label.setStyleSheet("font-size: 12px; color: #10b981; padding: 8px; background-color: #064e3b; border-radius: 6px; font-weight: bold;")
         
         self.status.setText(f"Status: Model loaded - Ready to select dataset")
         self.select_btn.setEnabled(True)
+        self.update_run_button_state()
         
     def select_folder(self):
         if not self.model_config:
             QMessageBox.warning(
                 self, 
                 "Model Required", 
-                "Please select a model first before analyzing the dataset."
+                "Please select a model first before selecting the dataset."
             )
             self.open_model_selection()
             return
 
         folder = QFileDialog.getExistingDirectory(self, "Select Dataset Folder")
         if folder:
+            self.selected_folder = folder
             self.status.setText(f"Scanning folder: {folder}...")
             QApplication.processEvents()
             
@@ -1117,19 +1191,17 @@ class YOLOInspector(QMainWindow):
             
             if not self.image_paths:
                 self.status.setText("⚠️ No images found in folder.")
+                self.folder_status_label.setText("⚠️ No images found in selected folder")
                 QMessageBox.warning(self, "No Images", "No valid image files found in the selected folder.")
+                self.selected_folder = None
+                self.update_run_button_state()
                 return
 
-            self.status.setText(f"Found {len(self.image_paths)} images. Starting analysis...")
-            self.progress.setValue(0)
-            self.select_btn.setEnabled(False)
-            self.model_select_btn.setEnabled(False)
-
-            self.worker = AnalyzerWorker(self.image_paths, self.model_config)
-            self.worker.progress.connect(self.progress.setValue)
-            self.worker.status_message.connect(self.status.setText)
-            self.worker.finished.connect(self.analysis_done)
-            self.worker.start()
+            self.folder_status_label.setText(f"✅ {len(self.image_paths)} images found")
+            self.folder_status_label.setStyleSheet("font-size: 12px; color: #10b981; padding: 8px; background-color: #064e3b; border-radius: 6px; font-weight: bold;")
+            
+            self.status.setText(f"Found {len(self.image_paths)} images. Ready to analyze.")
+            self.update_run_button_state()
 
     def import_images(self, folder):
         images = []
@@ -1139,11 +1211,45 @@ class YOLOInspector(QMainWindow):
                 if f.lower().endswith(exts):
                     images.append(os.path.join(root, f))
         return images
+        
+    def update_threshold_from_slider(self, value):
+        self.threshold_spinbox.setValue(value)
+        
+    def update_threshold_from_spinbox(self, value):
+        self.threshold_slider.setValue(value)
+        
+    def update_run_button_state(self):
+        can_run = self.model_config is not None and self.selected_folder is not None and len(self.image_paths) > 0
+        self.run_analysis_btn.setEnabled(can_run)
+        
+    def run_analysis(self):
+        if not self.model_config or not self.selected_folder or not self.image_paths:
+            QMessageBox.warning(self, "Requirements Missing", "Please select both a model and dataset folder first.")
+            return
+            
+        threshold = self.threshold_spinbox.value() / 100.0  # Convert percentage to decimal
+        
+        self.status.setText(f"Starting analysis with {threshold:.2f} threshold...")
+        self.progress.setValue(0)
+        self.select_btn.setEnabled(False)
+        self.model_select_btn.setEnabled(False)
+        self.run_analysis_btn.setEnabled(False)
+        self.threshold_slider.setEnabled(False)
+        self.threshold_spinbox.setEnabled(False)
+
+        self.worker = AnalyzerWorker(self.image_paths, self.model_config, threshold)
+        self.worker.progress.connect(self.progress.setValue)
+        self.worker.status_message.connect(self.status.setText)
+        self.worker.finished.connect(self.analysis_done)
+        self.worker.start()
 
     def analysis_done(self, result):
         self.progress.setValue(100)
         self.select_btn.setEnabled(True)
         self.model_select_btn.setEnabled(True)
+        self.run_analysis_btn.setEnabled(True)
+        self.threshold_slider.setEnabled(True)
+        self.threshold_spinbox.setEnabled(True)
         
         if result.get("error"):
             self.status.setText(f"❌ Error: {result['error']}")
@@ -1179,9 +1285,11 @@ class YOLOInspector(QMainWindow):
 
         self.tabs.clear()
         self.tabs.addTab(dup_tab, "Duplicate Analysis")
+        threshold_pct = self.threshold_spinbox.value()
         self.summary.setText(
             f"Model: {result.get('model_info', 'Unknown')}\n"
             f"Total Images: {result['total_images']}\n"
+            f"Threshold: {threshold_pct}%\n"
             f"Duplicates Found: {len(result['duplicates'])}"
         )
 

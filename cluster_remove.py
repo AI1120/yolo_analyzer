@@ -21,6 +21,11 @@ import seaborn as sns
 from datetime import datetime
 import json
 import shutil
+try:
+    from safetensors.torch import load_file as load_safetensors
+except:
+    load_safetensors = None
+import yaml
 
 try:
     import open_clip
@@ -74,37 +79,40 @@ class ClusteringWorker(QThread):
                     if not os.path.exists(config_file):
                         raise FileNotFoundError(f"Config file not found: {config_file}")
                     
-                    model, _, preprocess = open_clip.create_model_and_transforms(
-                        'ViT-B-32',
-                        pretrained=None,
-                        device=self.device
-                    )
+                    # model, _, preprocess = open_clip.create_model_and_transforms(
+                    #     'ViT-B-32',
+                    #     pretrained=None,
+                    #     device=self.device
+                    # )
                     
-                    checkpoint = torch.load(model_file, map_location=self.device)
-                    if 'state_dict' in checkpoint:
-                        model.load_state_dict(checkpoint['state_dict'])
-                    else:
-                        model.load_state_dict(checkpoint)
+                    # checkpoint = torch.load(model_file, map_location=self.device)
+                    # if 'state_dict' in checkpoint:
+                    #     model.load_state_dict(checkpoint['state_dict'])
+                    # else:
+                    #     model.load_state_dict(checkpoint)
+                    model, preprocess, _ = self.load_openclip('ViT-B-32', weights_path=model_file, device=self.device)
                         
-                elif os.path.isfile(self.model_path) and self.model_path.endswith(('.pt', '.bin')):
-                    model, _, preprocess = open_clip.create_model_and_transforms(
-                        'ViT-B-32',
-                        pretrained=None,
-                        device=self.device
-                    )
-                    checkpoint = torch.load(self.model_path, map_location=self.device)
-                    if 'state_dict' in checkpoint:
-                        model.load_state_dict(checkpoint['state_dict'])
-                    else:
-                        model.load_state_dict(checkpoint)
+                elif os.path.isfile(self.model_path) and self.model_path.endswith(('.pt', '.bin', '.safetensors')):
+                    # model, _, preprocess = open_clip.create_model_and_transforms(
+                    #     'ViT-B-32',
+                    #     pretrained=None,
+                    #     device=self.device
+                    # )
+                    # checkpoint = torch.load(self.model_path, map_location=self.device)
+                    # if 'state_dict' in checkpoint:
+                    #     model.load_state_dict(checkpoint['state_dict'])
+                    # else:
+                    #     model.load_state_dict(checkpoint)
+                    model, preprocess, _ = self.load_openclip('ViT-B-32', weights_path=self.model_path, device=self.device)
                 else:
                     raise FileNotFoundError(f"Invalid model path: {self.model_path}")
             else:
-                model, _, preprocess = open_clip.create_model_and_transforms(
-                    'ViT-B-32',
-                    pretrained='laion2b_s34b_b79k',
-                    device=self.device
-                )
+                # model, _, preprocess = open_clip.create_model_and_transforms(
+                #     'ViT-B-32',
+                #     pretrained='laion2b_s34b_b79k',
+                #     device=self.device
+                # )
+                model, preprocess, _ = self.load_openclip('ViT-B-32', pretrained='laion2b_s34b_b79k', device=self.device)
             
             model.eval()
         except Exception as e:
@@ -216,6 +224,88 @@ class ClusteringWorker(QThread):
 
         self.finished.emit(result)
 
+    def load_openclip(
+        self, model_name: str = "ViT-B-32",
+        pretrained: str | None = "openai",
+        weights_path: str | None = None,
+        device: str | None = None,
+        precision: str = "fp32",
+    ):
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        model, preprocess, _ = open_clip.create_model_and_transforms(
+            model_name,
+            pretrained=None if weights_path else pretrained,
+            device=device
+        )
+
+        tokenizer = open_clip.get_tokenizer(model_name)
+
+        if weights_path:
+            if not os.path.exists(weights_path):
+                raise FileNotFoundError(weights_path)
+
+            ext = os.path.splitext(weights_path)[1].lower()
+
+            print(f"Loading OpenCLIP weights: {weights_path}")
+
+            # -------- SAFETENSORS --------
+            if ext == ".safetensors":
+                if load_safetensors is None:
+                    raise ImportError(
+                        "safetensors not installed. Install with: pip install safetensors"
+                    )
+
+                checkpoint = load_safetensors(weights_path, device=device)
+
+            # -------- PT / BIN --------
+            elif ext in [".pt", ".bin"]:
+                checkpoint = torch.load(
+                    weights_path,
+                    map_location=device,
+                    weights_only=False  # PyTorch >=2.6 compatibility
+                )
+
+            else:
+                raise ValueError(f"Unsupported checkpoint format: {ext}")
+
+            if isinstance(checkpoint, dict):
+                if "state_dict" in checkpoint:
+                    checkpoint = checkpoint["state_dict"]
+
+                elif "model_state_dict" in checkpoint:
+                    checkpoint = checkpoint["model_state_dict"]
+
+            new_state_dict = {}
+
+            for k, v in checkpoint.items():
+                if k.startswith("module."):
+                    k = k[7:]
+                new_state_dict[k] = v
+
+            checkpoint = new_state_dict
+
+            missing, unexpected = model.load_state_dict(checkpoint, strict=False)
+
+            if missing:
+                print(f"Missing keys: {len(missing)}")
+
+            if unexpected:
+                print(f"Unexpected keys: {len(unexpected)}")
+
+        if precision == "fp16":
+            model = model.half()
+
+        elif precision == "bf16":
+            model = model.to(dtype=torch.bfloat16)
+
+        model.eval()
+        model.to(device)
+
+        print(f"OpenCLIP model loaded: {model_name} on {device}")
+
+        return model, preprocess, tokenizer
 
 # -----------------------------
 # Cluster Preview Dialog
@@ -696,7 +786,7 @@ class ImageReducerApp(QMainWindow):
         local_path_layout.addWidget(self.browse_model_btn)
         model_layout.addLayout(local_path_layout)
         
-        self.model_help = QLabel("💡 Supports: .pt file, .bin file, or folder with config + weights")
+        self.model_help = QLabel("💡 Supports: .pt file, .bin file, .safetensors, or folder with config + weights")
         self.model_help.setStyleSheet("color: #666; font-size: 12px;")
         self.model_help.setWordWrap(True)
         model_layout.addWidget(self.model_help)
@@ -710,6 +800,11 @@ class ImageReducerApp(QMainWindow):
         self.select_btn = QPushButton("📁 Select Image Folder")
         self.select_btn.clicked.connect(self.select_folder)
         self.layout.addWidget(self.select_btn)
+
+        # NEW: YAML dataset button
+        self.select_yaml_btn = QPushButton("📄 Select dataset.yaml")
+        self.select_yaml_btn.clicked.connect(self.select_yaml)
+        self.layout.addWidget(self.select_yaml_btn)
 
         # Target count
         target_group = QGroupBox("Target Settings")
@@ -740,6 +835,61 @@ class ImageReducerApp(QMainWindow):
         self.viewer = None
         self.result_data = None
 
+    def select_yaml(self):
+        yaml_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select YOLO dataset.yaml",
+            "",
+            "YAML Files (*.yaml *.yml)"
+        )
+
+        if not yaml_path:
+            return
+
+        try:
+            with open(yaml_path, "r") as f:
+                data = yaml.safe_load(f)
+
+            dataset_root = os.path.dirname(yaml_path)
+
+            image_dirs = []
+
+            # read train paths
+            if "train" in data:
+                if isinstance(data["train"], list):
+                    image_dirs.extend(data["train"])
+                else:
+                    image_dirs.append(data["train"])
+
+            # read val paths
+            if "val" in data:
+                if isinstance(data["val"], list):
+                    image_dirs.extend(data["val"])
+                else:
+                    image_dirs.append(data["val"])
+
+            all_images = []
+
+            for p in image_dirs:
+                # resolve relative path
+                full_path = os.path.join(dataset_root, p)
+
+                if not os.path.exists(full_path):
+                    print(f"Warning: path not found {full_path}")
+                    continue
+
+                imgs = self.import_images(full_path)
+                all_images.extend(imgs)
+
+            self.image_paths = all_images
+
+            self.status.setText(
+                f"Loaded {len(self.image_paths)} images from dataset.yaml"
+            )
+
+        except Exception as e:
+            QMessageBox.critical(self, "YAML Error", str(e))
+
     def on_model_source_changed(self):
         is_local = self.radio_local.isChecked()
         self.local_path_input.setEnabled(is_local)
@@ -752,11 +902,11 @@ class ImageReducerApp(QMainWindow):
         msg.setWindowTitle("Select Model Type")
         msg.setText("What type of model file do you have?")
         msg.setInformativeText(
-            "• Select 'Model File' if you have a .pt or .bin file\n"
+            "• Select 'Model File' if you have a .pt, .bin or .safetensors file\n"
             "• Select 'Model Folder' if you have a folder with config + weights"
         )
         
-        btn_file = QPushButton("📄 Model File (.pt/.bin)")
+        btn_file = QPushButton("📄 Model File (.pt/.bin/.safetensors)")
         btn_folder = QPushButton("📁 Model Folder")
         btn_cancel = QPushButton("Cancel")
         
@@ -771,7 +921,7 @@ class ImageReducerApp(QMainWindow):
         if clicked_btn == btn_file:
             file_path, _ = QFileDialog.getOpenFileName(
                 self, "Select Model File", "", 
-                "Model Files (*.pt *.bin);;All Files (*)"
+                "Model Files (*.pt *.bin *.safetensors);;All Files (*)"
             )
             if file_path:
                 self.local_path_input.setText(file_path)
@@ -815,9 +965,9 @@ class ImageReducerApp(QMainWindow):
                 return
             
             if os.path.isfile(model_path):
-                if not model_path.endswith(('.pt', '.bin')):
+                if not model_path.endswith(('.pt', '.bin', '.safetensors')):
                     QMessageBox.warning(self, "Warning", 
-                        f"Selected file may not be a valid model:\n{model_path}\n\nExpected: .pt or .bin file")
+                        f"Selected file may not be a valid model:\n{model_path}\n\nExpected: .pt, .bin or .safetensors file")
             elif os.path.isdir(model_path):
                 model_file = os.path.join(model_path, "open_clip_pytorch_model.bin")
                 config_file = os.path.join(model_path, "open_clip_config.json")

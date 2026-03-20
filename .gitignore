@@ -147,3 +147,5 @@ TODO.md
 __pycache__/
 *.pyc
 sample_data/
+diversity_app/history/
+wheels/

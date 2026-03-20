@@ -16,7 +16,7 @@ class AnalysisWorker(QThread):
     def run(self):
         try:
             self.progress.emit("Loading dataset configuration...")
-            analyzer = DatasetAnalyzer(self.yaml_path)
+            analyzer = DatasetAnalyzer(self.yaml_path, self.progress.emit)
             
             self.progress.emit("Analyzing training data...")
             train_df, test_df, train_counts, test_counts, train_imgs, summary, class_names = analyzer.run()
